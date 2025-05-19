@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Script to count empty cells in a delimited file
+# Usage: ./count_empty_cells.sh <filename> <delimiter>
+
+# Check for correct number of arguments
+if [ $# -ne 2 ]; then
+    echo "Usage: $0 <filename> <delimiter>"
+    exit 1
+fi
+
+input_file="$1"
+delimiter="$2"
+
+# Verify the file exists
+if [ ! -f "$input_file" ]; then
+    echo "Error: File '$input_file' not found."
+    exit 1
+fi
+
+# Temporary file to handle CRLF line endings
+clean_file=$(mktemp)
+tr -d '\r' < "$input_file" > "$clean_file"
+
+# Read header line to capture column names
+IFS="$delimiter" read -r -a columns < "$clean_file"
+col_count=${#columns[@]}
+
+# Initialize array for empty cell counts
+empty_counts=()
+for ((idx=0; idx<col_count; idx++)); do
+    empty_counts[idx]=0
+done
+
+# Process each row, excluding the header
+while IFS="$delimiter" read -r -a data_row; do
+    # Ensure each row has the correct number of columns by padding if necessary
+    for ((idx=${#data_row[@]}; idx<col_count; idx++)); do
+        data_row[idx]=""
+    done
+
+    # Trim leading and trailing spaces, count empty cells
+    for ((idx=0; idx<col_count; idx++)); do
+        cell="${data_row[idx]}"
+        cell="${cell##*( )}"
+        cell="${cell%%*( )}"
+        if [ -z "$cell" ]; then
+            (( empty_counts[idx]++ ))
+        fi
+    done
+
+done < <(tail -n +2 "$clean_file")
+
+# Print the results in a readable format
+for ((idx=0; idx<col_count; idx++)); do
+    echo "${columns[idx]}: ${empty_counts[idx]}"
+done
+
+# Clean up temporary file
+rm "$clean_file"
