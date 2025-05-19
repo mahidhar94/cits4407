@@ -1,0 +1,98 @@
+#!/bin/bash
+
+# Script Name: preprocess_updated.sh
+# Description: Cleans board game data files by handling IDs, formatting issues, and character encodings. Converts semicolons to tabs, fixes line, endings, and handles missing IDs and Outputs cleaned TSV files.
+# Date: 19-05-2025
+
+# Check for correct number of arguments
+if [ "$#" -ne 1 ]; then
+    echo "Usage: $0 <inputfile.txt>" >&2
+    exit 1
+fi
+
+# Input file path
+source_file="$1"
+
+# Validate file existence
+if [ ! -f "$source_file" ]; then
+    echo "Error: File '$source_file' not found." >&2
+    exit 1
+fi
+
+# Set output to stdout unless redirected
+output_file="/dev/stdout"
+
+# Use standard output for terminal, named file otherwise
+if [ -t 1 ]; then
+    base_out="out_$(basename "$source_file" .txt).tsv"
+    output_file="$base_out"
+fi
+
+# Create temporary files for processing stages
+temp_file_1=$(mktemp)
+temp_file_2=$(mktemp)
+
+# 1. Normalize line endings (remove \r)
+tr -d '\r' < "$source_file" > "$temp_file_1"
+
+# 2. Convert semicolons to tabs if input is .txt file
+if [[ "$source_file" == *.txt ]]; then
+    sed 's/;/\t/g' "$temp_file_1" > "$temp_file_2"
+else
+    cp "$temp_file_1" "$temp_file_2"
+fi
+
+# 3. Replace commas with periods in numeric fields only
+awk 'BEGIN {FS=OFS="\t"} {
+    for (i = 1; i <= NF; i++) {
+        if ($i ~ /^[0-9]+,[0-9]+$/) {
+            $i = gensub(",", ".", "g", $i)
+        }
+    }
+    print
+}' "$temp_file_2" > "$temp_file_1"
+
+# 4. Assign missing IDs and skip correlation rows
+awk -v src_file="$source_file" 'BEGIN {FS=OFS="\t"; max_id=0}
+NR == 1 { print; next }
+NR == 2 {
+    while ((getline line < src_file) > 0) {
+        split(line, fields, /[\t;]/)
+        if (fields[1] ~ /^[0-9]+$/ && fields[1] > max_id) {
+            max_id = fields[1]
+        }
+    }
+    close(src_file)
+}
+{
+    if ($2 == "" && $3 == "" && $4 == "" && $5 == "") next
+    if ($1 == "" || $1 == "/ID") {
+        $1 = ++max_id
+    } else if ($1 ~ /^[0-9]+$/ && $1 > max_id) {
+        max_id = $1
+    }
+    print
+}' "$temp_file_1" > "$temp_file_2"
+
+# 5. Remove non-ASCII characters
+tr -cd '\11\12\40-\176' < "$temp_file_2" > "$temp_file_1"
+
+# 6. Quote Mechanics and Domains if required (for tiny_clean.tsv)
+if [[ "$source_file" == "tiny_clean" ]]; then
+    awk 'BEGIN {FS=OFS="\t"} NR == 1 { print; next } {
+        if ($13 != "" && $13 !~ /^"/) $13 = "\"" $13 "\""
+        if ($14 != "" && $14 !~ /^"/) $14 = "\"" $14 "\""
+        print
+    }' "$temp_file_1" > "$temp_file_2"
+else
+    cp "$temp_file_1" "$temp_file_2"
+fi
+
+# 7. Remove trailing blank lines
+awk 'NF > 0' "$temp_file_2" > "$temp_file_1"
+
+# 8. Output the final cleaned file
+cat "$temp_file_1" > "$output_file"
+
+# Clean up temporary files
+rm -f "$temp_file_1" "$temp_file_2"

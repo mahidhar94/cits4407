@@ -1,0 +1,91 @@
+#!/bin/bash
+
+# Metadata
+# Title: Game Data Analysis Script (No Associative Arrays)
+# Description: This script analyzes cleaned board game data to identify the most popular mechanics, domains, and calculate Pearson correlation coefficients for game characteristics.
+# Date: 19-05-2025
+
+# Check for correct number of arguments
+if [ "$#" -ne 1 ]; then
+    echo "Usage: $0 <input_file.tsv>" >&2
+    exit 1
+fi
+
+input_file="$1"
+
+# Validate file existence
+if [ ! -f "$input_file" ]; then
+    echo "Error: File '$input_file' not found." >&2
+    exit 1
+fi
+
+# Initialize counters
+total_games=0
+year_sum=0
+rating_sum=0
+complexity_sum=0
+year_sq_sum=0
+rating_sq_sum=0
+complexity_sq_sum=0
+year_rating_sum=0
+complexity_rating_sum=0
+
+# Temp files for mechanics and domains
+mech_temp=$(mktemp)
+dom_temp=$(mktemp)
+
+# Read and process each line in the input file (skipping the header)
+while IFS=$'\t' read -r id name year_published min_players max_players play_time min_age users_rated rating_avg bgg_rank complexity_avg owned_users mechanics domains; do
+    # Skip header row
+    if [ "$id" == "/ID" ]; then
+        continue
+    fi
+
+    # Increment game count
+    total_games=$((total_games + 1))
+    
+    # Convert to numeric for correlation calculation
+    year_published=${year_published//,/}
+    rating_avg=${rating_avg//,/}
+    complexity_avg=${complexity_avg//,/}
+
+    # Calculate sums for correlation
+    year_sum=$((year_sum + year_published))
+    rating_sum=$(echo "$rating_sum + $rating_avg" | bc -l)
+    complexity_sum=$(echo "$complexity_sum + $complexity_avg" | bc -l)
+    year_sq_sum=$((year_sq_sum + (year_published ** 2)))
+    rating_sq_sum=$(echo "$rating_sq_sum + ($rating_avg * $rating_avg)" | bc -l)
+    complexity_sq_sum=$(echo "$complexity_sq_sum + ($complexity_avg * $complexity_avg)" | bc -l)
+    year_rating_sum=$(echo "$year_rating_sum + ($year_published * $rating_avg)" | bc -l)
+    complexity_rating_sum=$(echo "$complexity_rating_sum + ($complexity_avg * $rating_avg)" | bc -l)
+    
+    # Extract and count mechanics
+    echo "$mechanics" | tr ',' '\n' | sed 's/^ *//;s/ *$//' >> "$mech_temp"
+    
+    # Extract and count domains
+    echo "$domains" | tr ',' '\n' | sed 's/^ *//;s/ *$//' >> "$dom_temp"
+
+done < "$input_file"
+
+# Calculate Pearson correlations with higher precision
+rating_year_corr=$(echo "scale=10; ($total_games * $year_rating_sum - $year_sum * $rating_sum) / sqrt(($total_games * $year_sq_sum - $year_sum^2) * ($total_games * $rating_sq_sum - $rating_sum^2))" | bc -l | awk '{printf "%.3f", $1}')
+complexity_rating_corr=$(echo "scale=10; ($total_games * $complexity_rating_sum - $complexity_sum * $rating_sum) / sqrt(($total_games * $complexity_sq_sum - $complexity_sum^2) * ($total_games * $rating_sq_sum - $rating_sum^2))" | bc -l | awk '{printf "%.3f", $1}')
+
+# Find most popular mechanic
+popular_mech=$(awk '{count[$0]++} END {for (key in count) print count[key], key}' "$mech_temp" | sort -nr | head -n 1)
+mech_count=$(echo "$popular_mech" | awk '{print $1}')
+mech_name=$(echo "$popular_mech" | cut -d' ' -f2-)
+
+# Find most popular domain
+popular_domain=$(awk '{count[$0]++} END {for (key in count) print count[key], key}' "$dom_temp" | sort -nr | head -n 1)
+domain_count=$(echo "$popular_domain" | awk '{print $1}')
+domain_name=$(echo "$popular_domain" | cut -d' ' -f2-)
+
+# Clean up temporary files
+rm -f "$mech_temp" "$dom_temp"
+
+# Print results
+echo "The most popular game mechanics is $mech_name found in $mech_count games"
+echo "The most game domain is $domain_name found in $domain_count games"
+echo "The correlation between the year of publication and the average rating is $rating_year_corr"
+echo "The correlation between the complexity of a game and its average rating is $complexity_rating_corr"
